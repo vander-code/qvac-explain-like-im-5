@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explain It Like I'm 5</title>
+<style>
+  :root { --sky: #dff3ff; --sun: #ffcf33; --grape: #5b3fd0; --ink: #2b2350; --muted: #62608a; --card: #fff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--sky); color: var(--ink);
+         font: 17px/1.55 "Trebuchet MS", "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 620px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 6px; }
+  h1 span { background: var(--sun); padding: 0 10px; border-radius: 10px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  #status { font-size: 14px; color: var(--muted); margin: 0 0 12px; }
+  #status.ok { color: #1c7a4a; } #status.err { color: #b3261e; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; padding: 12px 14px; border: 3px solid var(--ink);
+          border-radius: 14px; background: #fff; color: var(--ink); }
+  button { font: inherit; font-weight: 700; padding: 12px 18px; border: 3px solid var(--ink);
+           border-radius: 14px; background: var(--grape); color: #fff; cursor: pointer; }
+  button.alt { background: #fff; color: var(--ink); padding: 8px 14px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input:focus-visible, button:focus-visible { outline: 4px solid var(--sun); outline-offset: 2px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  #answerBox { margin-top: 22px; }
+  #concept { font-weight: 700; font-size: 20px; margin: 0 0 8px; }
+  #answer { background: var(--card); border: 3px solid var(--ink); border-radius: 18px;
+            padding: 18px; font-size: 20px; line-height: 1.55; white-space: pre-wrap; min-height: 90px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Explain It Like I'm <span>5</span></h1>
+  <p class="sub">Type anything that sounds complicated. Get an answer a 5-year-old would understand.</p>
+  <p id="status">Checking the AI model...</p>
+
+  <div class="row">
+    <input id="topic" placeholder="For example: black holes" autocomplete="off" aria-label="What should I explain?">
+    <button id="go" disabled>Explain</button>
+  </div>
+  <div class="chips" id="chips">
+    <button class="alt">Black holes</button>
+    <button class="alt">Inflation</button>
+    <button class="alt">How the internet works</button>
+  </div>
+
+  <section id="answerBox" class="hidden">
+    <p id="concept"></p>
+    <div id="answer" aria-live="polite"></div>
+    <div class="actions">
+      <button class="alt" id="simpler">Even simpler</button>
+      <button class="alt" id="example">Give me an example</button>
+      <button class="alt" id="why">Why?</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let messages = [];
+let busy = false;
+
+// ---- Wait until the AI model is loaded ----
+async function checkStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    if (s.error) { setStatus("Model error: " + s.error, "err"); return; }
+    if (s.ready) { setStatus("AI model ready. Running on your device.", "ok"); setControls(); return; }
+    setStatus(s.message + (s.percent != null ? " " + s.percent + "%" : ""));
+  } catch { setStatus("Can't reach the server. Is it running?", "err"); }
+  setTimeout(checkStatus, 1000);
+}
+function setStatus(text, cls = "") { $("status").textContent = text; $("status").className = cls; ready = cls === "ok" || ready; }
+let ready = false;
+
+function setControls() {
+  const off = busy || !ready;
+  ["go", "simpler", "example", "why"].forEach((id) => ($(id).disabled = off));
+}
+
+// ---- Ask the AI and stream the reply into the answer box ----
+async function ask(text) {
+  if (busy || !ready || !text.trim()) return;
+  messages.push({ role: "user", content: text.trim() });
+  busy = true; setControls();
+  $("answer").textContent = "Thinking...";
+  let reply = "";
+  try {
+    const res = await fetch("/api/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      reply += decoder.decode(value, { stream: true });
+      $("answer").textContent = reply;
+    }
+    messages.push({ role: "assistant", content: reply.trim() });
+  } catch {
+    $("answer").textContent = "Something went wrong. Please try again.";
+    messages.pop();
+  }
+  busy = false; setControls();
+}
+
+function explain(topic) {
+  if (!topic.trim()) return;
+  messages = [];
+  $("concept").textContent = topic.trim();
+  $("answerBox").classList.remove("hidden");
+  ask(`Explain this to me like I'm 5 years old: ${topic.trim()}`);
+}
+
+$("go").onclick = () => explain($("topic").value);
+$("topic").onkeydown = (e) => { if (e.key === "Enter") explain($("topic").value); };
+$("chips").onclick = (e) => { if (e.target.tagName === "BUTTON") { $("topic").value = e.target.textContent; explain(e.target.textContent); } };
+$("simpler").onclick = () => ask("That was still hard. Explain it even simpler, in 2 or 3 short sentences.");
+$("example").onclick = () => ask("Can you give me a real-life example I can see at home or at the playground?");
+$("why").onclick = () => ask("Why?");
+
+checkStatus();
+</script>
+</body>
+</html>
